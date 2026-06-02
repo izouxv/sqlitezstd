@@ -8,17 +8,61 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/brianvoe/gofakeit/v7"
-	_ "github.com/jtarchie/sqlitezstd"
+	sqlitezstd "github.com/jtarchie/sqlitezstd"
 	_ "github.com/mattn/go-sqlite3" // ensure you import the SQLite3 driver
-	"github.com/onsi/gomega/gexec"
 )
+
+// minCacheVFS registers (once) a VFS whose frame cache holds a single frame,
+// approximating the pre-cache behavior where the upstream reader kept only one
+// decompressed frame. Benchmarking against it on the same fixture isolates the
+// effect of the frame cache.
+func minCacheVFS(b *testing.B) string {
+	b.Helper()
+
+	const name = "zstd-mincache"
+
+	if err := sqlitezstd.Register(name, sqlitezstd.WithFrameCacheSize(1)); err != nil &&
+		!strings.Contains(err.Error(), "already") {
+		b.Fatalf("Failed to register min-cache vfs: %v", err)
+	}
+
+	return name
+}
+
+// BenchmarkReadCompressedSQLiteFTS5PorterMinCache mirrors
+// BenchmarkReadCompressedSQLiteFTS5Porter but with a single-frame cache, so the
+// two together show the frame cache's impact (allocs/op and B/op in particular).
+func BenchmarkReadCompressedSQLiteFTS5PorterMinCache(b *testing.B) {
+	_, zstPath := setupDB(b)
+
+	vfs := minCacheVFS(b)
+
+	client, err := sql.Open("sqlite3", fmt.Sprintf("%s?vfs=%s", zstPath, vfs))
+	if err != nil {
+		b.Fatalf("Failed to open database: %v", err)
+	}
+	defer client.Close() //nolint: errcheck
+
+	client.SetMaxOpenConns(max(4, runtime.NumCPU()))
+
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		var count int
+		for pb.Next() {
+			err = client.QueryRow("SELECT COUNT(*) FROM entries_porter WHERE entries_porter MATCH 'alligator OR work'").Scan(&count)
+			if err != nil {
+				b.Fatalf("Query failed: %v", err)
+			}
+		}
+	})
+}
 
 // nolint: gosec
 func randomBoundingBox() (float64, float64, float64, float64) {
@@ -93,9 +137,8 @@ func setupDB(b *testing.B) (string, string) {
 	slog.Info("insert.start")
 
 	for range 1_000_000 {
-		//nolint: gosec
 		minX, maxX, minY, maxY := randomBoundingBox()
-		_, err = insertEntry.Exec(rand.Int63(), gofakeit.Sentence(100), minX, maxX, minY, maxY)
+		_, err = insertEntry.Exec(rand.Int63(), gofakeit.Sentence(100), minX, maxX, minY, maxY) //nolint: gosec
 		if err != nil {
 			b.Fatalf("Failed to insert data: %v", err)
 		}
@@ -130,28 +173,8 @@ func setupDB(b *testing.B) (string, string) {
 	// and that it's already correctly set up and works.
 	zstPath = dbPath + ".zst"
 
-	command := exec.Command(
-		"go", "run", "github.com/SaveTheRbtz/zstd-seekable-format-go/cmd/zstdseek",
-		"-f", dbPath,
-		"-o", zstPath,
-		"-c", "16:32:64",
-	)
-
-	session, err := gexec.Start(command, os.Stderr, os.Stderr)
-	if err != nil {
+	if err := compressSeekable(dbPath, zstPath, 16*1024); err != nil {
 		b.Fatalf("Failed to compress data: %v", err)
-	}
-
-	timeout := time.NewTimer(30 * time.Second)
-	defer timeout.Stop()
-
-	select {
-	case <-session.Exited:
-		if session.ExitCode() != 0 {
-			panic("something went wrong compressing")
-		}
-	case <-timeout.C:
-		panic("something timeout wrong compressing")
 	}
 
 	slog.Info("compression.end")

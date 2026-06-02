@@ -1,0 +1,21 @@
+# golangci-lint v2 configuration. Pins the enabled linter set so the //nolint
+# directives in the code and the CI lint gate behave the same locally and in CI.
+version: "2"
+
+run:
+  build-tags:
+    - fts5
+
+linters:
+  # Start from the default set (errcheck, govet, ineffassign, staticcheck,
+  # unused) and add the linters the //nolint directives in this repo assume.
+  default: standard
+  enable:
+    - cyclop
+    - gochecknoglobals
+    - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

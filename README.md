@@ -36,8 +36,20 @@ go run github.com/SaveTheRbtz/zstd-seekable-format-go/cmd/zstdseek \
     -o <dbPath>.zst
 ```
 
-The CLI provides different options for compression levels, but I do not have
-specific recommendations for best usage patterns.
+### Choosing a frame size
+
+The `-c min:avg:max` option controls the size of each zstd *frame* (in KiB). The
+frame is the unit of random access: to read any byte, the whole frame containing
+it must be fetched and decompressed. SQLiteZSTD caches recently used frames (see
+[Configuration](#configuration)), so frame size is the main tuning knob:
+
+- **Too large** — more bytes fetched/decompressed per read, and frames whose
+  *compressed* size exceeds 128 MiB are rejected outright by the reader.
+- **Too small** — worse compression ratio and more per-frame overhead.
+
+A frame size on the order of tens to a few hundred KiB (for example
+`-c 16:32:64`) is a reasonable starting point; align it to your read locality and
+measure.
 
 Below is an example of how to use SQLiteZSTD in a Go program:
 
@@ -51,18 +63,14 @@ if err != nil {
     panic(fmt.Sprintf("Failed to open database: %s", err))
 }
 
-// Set PRAGMA for each connection
-db.SetConnMaxLifetime(0) // Disable connection pooling
-db.SetMaxOpenConns(1)    // Allow only one open connection
-
 conn, err := db.Conn(context.Background())
 if err != nil {
     panic(fmt.Sprintf("Failed to get connection: %s", err))
 }
 defer conn.Close()
 
-// PRAGMA's are not persisted across `database/sql` pooled connections
-// this is to _ensure_ it happens for this one.
+// PRAGMAs are not persisted across `database/sql` pooled connections;
+// this ensures the setting applies to the connection you query on.
 _, err = conn.ExecContext(context.Background(), `PRAGMA temp_store = memory;`)
 if err != nil {
     panic(fmt.Sprintf("Failed to set PRAGMA: %s", err))
@@ -75,8 +83,60 @@ In this Go code example:
 
 - The `sql.Open()` function takes as a parameter the path to the compressed
   SQLite database, appended with a query string with `vfs=zstd` to use the VFS.
-- Setting the `PRAGMA` ensures that the read only VFS is not used to create
-  temporary files.
+- `PRAGMA temp_store = memory` ensures the read-only VFS is not asked to create
+  temporary files on disk (which it cannot do).
+
+### Connections and concurrency
+
+The VFS is safe to use from multiple connections concurrently — the tests and
+benchmarks open many connections against one database. Each connection allocates
+its own decompression reader and frame cache, so the trade-off of a larger
+connection pool is **memory and duplicated decompression**, not correctness.
+Tune `db.SetMaxOpenConns(...)` to balance parallelism against memory; there is no
+requirement to limit it to a single connection.
+
+### Reading over HTTP(S)
+
+Pass an `http://` or `https://` URL as the filename to read a remote database
+without downloading it in full — only the bytes needed for each query are
+fetched using HTTP range requests:
+
+```go
+db, err := sql.Open("sqlite3", "https://example.com/data.sqlite.zst?vfs=zstd")
+```
+
+The server **must** support HTTP range requests (responding `206 Partial
+Content` with a `Content-Range` header); a server that ignores `Range` is
+rejected rather than silently returning wrong data. Each opened connection makes
+one small request to determine the file size, then fetches frames on demand.
+Frames are cached per connection, so repeated reads do not re-hit the network.
+
+### Build tags
+
+Databases that use SQLite extensions such as FTS5 or R*Tree require building your
+binary with the matching `mattn/go-sqlite3` build tag, e.g.:
+
+```bash
+go build -tags fts5 ./...
+```
+
+### Configuration
+
+Importing the package registers a `zstd` VFS with sensible defaults. To tune the
+frame-cache size, HTTP timeout, retry count, or logger, register your own named
+VFS and reference it via `?vfs=<name>`:
+
+```go
+import sqlitezstd "github.com/jtarchie/sqlitezstd"
+
+err := sqlitezstd.Register("zstd-tuned",
+    sqlitezstd.WithFrameCacheSize(128),
+    sqlitezstd.WithHTTPTimeout(10*time.Second),
+    sqlitezstd.WithHTTPRetries(5),
+)
+// ...
+db, _ := sql.Open("sqlite3", "https://example.com/data.sqlite.zst?vfs=zstd-tuned")
+```
 
 ## Performance
 

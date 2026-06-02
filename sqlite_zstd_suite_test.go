@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	_ "github.com/jtarchie/sqlitezstd"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/gexec"
 )
 
 func TestSqliteZstd(t *testing.T) {
@@ -72,15 +70,7 @@ func createDatabase() string {
 
 	zstPath := dbPath + ".zst"
 
-	command := exec.Command(
-		"go", "run", "github.com/SaveTheRbtz/zstd-seekable-format-go/cmd/zstdseek",
-		"-f", dbPath,
-		"-o", zstPath,
-	)
-
-	session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
-	Expect(err).ToNot(HaveOccurred())
-	Eventually(session).Should(gexec.Exit(0))
+	Expect(compressSeekable(dbPath, zstPath, 0)).To(Succeed())
 
 	return zstPath
 }
@@ -139,17 +129,7 @@ func createComplexDatabase() (string, string) {
 
 	zstPath := dbPath + ".zst"
 
-	command := exec.Command(
-		"go", "run", "github.com/SaveTheRbtz/zstd-seekable-format-go/cmd/zstdseek",
-		"-f", dbPath,
-		"-o", zstPath,
-		"-t",
-		"-c", "16:32:64",
-	)
-
-	session, err := gexec.Start(command, GinkgoWriter, GinkgoWriter)
-	Expect(err).ToNot(HaveOccurred())
-	Eventually(session).Should(gexec.Exit(0))
+	Expect(compressSeekable(dbPath, zstPath, 16*1024)).To(Succeed())
 
 	return dbPath, zstPath
 }
@@ -303,7 +283,7 @@ var _ = Describe("SqliteZSTD", func() {
 			}
 
 			// Open the file
-			file, err := os.Open(filepath.Join(zstDir, filepath.Base(zstPath)))
+			file, err := os.Open(filepath.Join(zstDir, filepath.Base(zstPath))) //nolint: gosec
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -350,10 +330,12 @@ var _ = Describe("SqliteZSTD", func() {
 		// Verify Range headers were used
 		Expect(finalRangeCount).To(BeNumerically(">", 0), "Expected Range requests to be made")
 
-		// The key assertion: we should NOT download the entire file for a simple single-row query
-		// Target: download less than 50% of the file
+		// The key assertion: we should NOT download the entire file for a simple single-row query.
+		// A single-row primary-key lookup against a 1M-row single-column table should touch only a
+		// handful of pages/frames, so anything approaching even a few percent indicates a regression
+		// (e.g. a broken cache re-fetching whole frames, or a fallback to large reads).
 		percentDownloaded := float64(finalBytesServed) / float64(fileSize) * 100
-		Expect(percentDownloaded).To(BeNumerically("<", 50.0),
-			"Should download less than 50%% of file for single-row query, but downloaded %.2f%%", percentDownloaded)
+		Expect(percentDownloaded).To(BeNumerically("<", 5.0),
+			"Should download less than 5%% of file for single-row query, but downloaded %.2f%%", percentDownloaded)
 	})
 })

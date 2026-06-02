@@ -14,10 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: denoland/setup-deno@v1
     - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
     - uses: golangci/golangci-lint-action@v7
       with:
+        version: v2.12.2
         github-token: ${{ secrets.GITHUB_TOKEN }}
     - name: go mod download
       run: go mod download

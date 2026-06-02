@@ -1,3 +1,6 @@
+// The Read/Seek bounds logic below is derived from the Wuffs project's
+// readerat package.
+//
 // Copyright 2019 The Wuffs Authors.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
@@ -8,49 +11,100 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// ----------------
-
-// Package readerat provides utilities for the io.ReaderAt type.
 package sqlitezstd
 
 import (
 	"errors"
 	"io"
+	"sync"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 var (
-	errInvalidSize            = errors.New("readerat: invalid size")
-	errSeekToInvalidWhence    = errors.New("readerat: seek to invalid whence")
-	errSeekToNegativePosition = errors.New("readerat: seek to negative position")
+	errInvalidSize            = errors.New("sqlitezstd: invalid size")
+	errSeekToInvalidWhence    = errors.New("sqlitezstd: seek to invalid whence")
+	errSeekToNegativePosition = errors.New("sqlitezstd: seek to negative position")
 )
 
-// ReadSeeker is an io.ReadSeeker implementation based on an io.ReaderAt (and
-// an int64 size).
+// frameReader adapts a fixed-size io.ReaderAt (a local *os.File or the HTTP
+// range reader) into the io.ReadSeeker the seekable reader requires, while also
+// exposing a cached io.ReaderAt.
 //
-// For example, an os.File is both an io.ReaderAt and an io.ReadSeeker, but its
-// io.ReadSeeker methods are not safe to use concurrently. In comparison,
-// multiple readerat.ReadSeeker values (using the same os.File as their
-// io.ReaderAt) are safe to use concurrently. Each can Read and Seek
-// independently.
+// Exposing ReadAt is important for two reasons: the seekable reader only takes
+// its concurrency-safe, positional fast-path when the underlying reader
+// implements io.ReaderAt (otherwise it falls back to a mutex-guarded Seek+Read);
+// and the LRU here caches the compressed bytes of each frame keyed by offset, so
+// frames the upstream single-frame cache has evicted are not re-fetched from
+// disk or — far more importantly — re-fetched over the network.
 //
-// A single readerat.ReadSeeker is not safe to use concurrently.
-//
-// Do not modify its exported fields after calling any of its methods.
-type ReadSeeker struct {
-	ReaderAt io.ReaderAt
-	Size     int64
-	offset   int64
+// ReadAt is safe for concurrent use. The sequential Read/Seek methods (used only
+// for the seek-table footer at open time) are guarded by mu and must not be
+// called concurrently with each other.
+type frameReader struct {
+	src   io.ReaderAt
+	size  int64
+	cache *lru.Cache[int64, []byte]
+
+	mu     sync.Mutex
+	offset int64
 }
 
-// Read implements io.Reader.
-func (r *ReadSeeker) Read(p []byte) (int, error) {
-	if r.Size < 0 {
+var (
+	_ io.ReadSeeker = (*frameReader)(nil)
+	_ io.ReaderAt   = (*frameReader)(nil)
+	_ io.Closer     = (*frameReader)(nil)
+)
+
+func newFrameReader(src io.ReaderAt, size int64, cacheSize int) (*frameReader, error) {
+	cache, err := lru.New[int64, []byte](cacheSize)
+	if err != nil {
+		return nil, err
+	}
+
+	return &frameReader{src: src, size: size, cache: cache}, nil
+}
+
+// ReadAt implements io.ReaderAt and is safe for concurrent use. Compressed frame
+// bytes are served from the LRU when present (the seekable reader always
+// requests a given frame at the same offset and length).
+func (r *frameReader) ReadAt(p []byte, off int64) (int, error) {
+	if r.size < 0 {
 		return 0, errInvalidSize
 	}
-	if r.Size <= r.offset {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	if cached, ok := r.cache.Get(off); ok && len(cached) == len(p) {
+		copy(p, cached)
+
+		return len(p), nil
+	}
+
+	n, err := r.src.ReadAt(p, off)
+	if (err == nil || errors.Is(err, io.EOF)) && n == len(p) {
+		buf := make([]byte, n)
+		copy(buf, p[:n])
+		_ = r.cache.Add(off, buf)
+	}
+
+	return n, err
+}
+
+// Read implements io.Reader. It is not safe for concurrent use.
+func (r *frameReader) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.size < 0 {
+		return 0, errInvalidSize
+	}
+	if r.size <= r.offset {
 		return 0, io.EOF
 	}
-	length := r.Size - r.offset
+
+	length := r.size - r.offset
 	if int64(len(p)) > length {
 		p = p[:length]
 	}
@@ -58,17 +112,21 @@ func (r *ReadSeeker) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	actual, err := r.ReaderAt.ReadAt(p, r.offset)
+	actual, err := r.src.ReadAt(p, r.offset)
 	r.offset += int64(actual)
-	if (err == nil) && (r.offset == r.Size) {
+	if (err == nil) && (r.offset == r.size) {
 		err = io.EOF
 	}
+
 	return actual, err
 }
 
-// Seek implements io.Seeker.
-func (r *ReadSeeker) Seek(offset int64, whence int) (int64, error) {
-	if r.Size < 0 {
+// Seek implements io.Seeker. It is not safe for concurrent use.
+func (r *frameReader) Seek(offset int64, whence int) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.size < 0 {
 		return 0, errInvalidSize
 	}
 
@@ -78,7 +136,7 @@ func (r *ReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		offset += r.offset
 	case io.SeekEnd:
-		offset += r.Size
+		offset += r.size
 	default:
 		return 0, errSeekToInvalidWhence
 	}
@@ -86,6 +144,17 @@ func (r *ReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	if offset < 0 {
 		return 0, errSeekToNegativePosition
 	}
+
 	r.offset = offset
+
 	return r.offset, nil
+}
+
+// Close closes the underlying source if it is an io.Closer (e.g. a local file).
+func (r *frameReader) Close() error {
+	if closer, ok := r.src.(io.Closer); ok {
+		return closer.Close()
+	}
+
+	return nil
 }
