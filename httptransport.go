@@ -14,18 +14,23 @@ import (
 // request (a 200 to a ranged GET would otherwise be served as frame data —
 // silent corruption), and retries transient failures.
 func newRangeRoundTripper(o *Options) http.RoundTripper {
-	base := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   o.httpTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   o.httpTimeout,
-		ResponseHeaderTimeout: o.httpTimeout,
-		ExpectContinueTimeout: time.Second,
+	base := o.roundTripper
+	if base == nil {
+		// A caller-supplied transport owns its own timeouts; the default one
+		// enforces dial/response-header timeouts here.
+		base = &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   o.httpTimeout,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   o.httpTimeout,
+			ResponseHeaderTimeout: o.httpTimeout,
+			ExpectContinueTimeout: time.Second,
+		}
 	}
 
 	return &retryTransport{

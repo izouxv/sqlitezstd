@@ -84,11 +84,24 @@ func (z *ZstdVFS) resolveSource(name string) (io.ReaderAt, int64, error) {
 			return nil, 0, fmt.Errorf("parse url: %w", err)
 		}
 
-		ranger := httpreadat.New(uri.String(), httpreadat.WithRoundTripper(newRangeRoundTripper(z.opts)))
+		rangerOpts := []httpreadat.Option{httpreadat.WithRoundTripper(newRangeRoundTripper(z.opts))}
+
+		ranger := httpreadat.New(uri.String(), rangerOpts...)
 
 		size, err := ranger.Size()
 		if err != nil {
 			return nil, 0, fmt.Errorf("determine remote size: %w", err)
+		}
+
+		if z.opts.httpCacheBytes > 0 {
+			cache, err := newHTTPReadCache(size, z.opts.httpPageSize, z.opts.httpCacheBytes)
+			if err != nil {
+				return nil, 0, fmt.Errorf("create http cache: %w", err)
+			}
+
+			// Re-create the ranger with the coalescing cache handler installed,
+			// reusing the already-built transport.
+			ranger = httpreadat.New(uri.String(), append(rangerOpts, httpreadat.WithCacheHandler(cache))...)
 		}
 
 		return ranger, size, nil

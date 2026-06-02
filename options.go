@@ -2,6 +2,7 @@ package sqlitezstd
 
 import (
 	"log/slog"
+	"net/http"
 	"time"
 )
 
@@ -30,6 +31,9 @@ type Options struct {
 	frameCacheSize int
 	httpTimeout    time.Duration
 	httpMaxRetries int
+	httpCacheBytes int64
+	httpPageSize   int
+	roundTripper   http.RoundTripper
 	logger         *slog.Logger
 }
 
@@ -67,6 +71,51 @@ func WithHTTPRetries(n int) Option {
 	}
 }
 
+// WithHTTPCacheSize enables an in-memory, page-aligned read cache for the
+// HTTP(S) path, bounded to roughly maxBytes. It coalesces the contiguous run of
+// missing pages covering a read into a single Range GET and serves adjacent
+// frames from cache, drastically cutting request count for remote scans. A
+// value <= 0 (the default) disables the cache, preserving the original
+// one-GET-per-frame behavior. Has no effect on the local-file path.
+func WithHTTPCacheSize(maxBytes int64) Option {
+	return func(o *Options) {
+		o.httpCacheBytes = maxBytes
+	}
+}
+
+// WithHTTPPageSize sets the coalescing/read-ahead page size for the HTTP cache
+// (see [WithHTTPCacheSize]). Values <= 0 keep the default of
+// [DefaultHTTPPageSize].
+func WithHTTPPageSize(bytes int) Option {
+	return func(o *Options) {
+		if bytes > 0 {
+			o.httpPageSize = bytes
+		}
+	}
+}
+
+// WithRoundTripper sets the base http.RoundTripper used for the HTTP(S) path.
+// The library still wraps it with retry and Range-response validation, so a
+// caller can supply, for example, a request-signing transport for authenticated
+// buckets without losing those protections. A nil transport is ignored.
+func WithRoundTripper(rt http.RoundTripper) Option {
+	return func(o *Options) {
+		if rt != nil {
+			o.roundTripper = rt
+		}
+	}
+}
+
+// WithHTTPClient is a convenience that uses the client's Transport as the base
+// round-tripper (see [WithRoundTripper]). A nil client is ignored.
+func WithHTTPClient(c *http.Client) Option {
+	return func(o *Options) {
+		if c != nil && c.Transport != nil {
+			o.roundTripper = c.Transport
+		}
+	}
+}
+
 // WithLogger sets the logger used to report otherwise-opaque open/read failures
 // (the sqlite3vfs interface can only return fixed sentinel errors, so the real
 // cause is logged). A nil logger is ignored.
@@ -83,6 +132,7 @@ func defaultOptions() *Options {
 		frameCacheSize: DefaultFrameCacheSize,
 		httpTimeout:    DefaultHTTPTimeout,
 		httpMaxRetries: DefaultHTTPMaxRetries,
+		httpPageSize:   DefaultHTTPPageSize,
 		logger:         slog.Default(),
 	}
 }
