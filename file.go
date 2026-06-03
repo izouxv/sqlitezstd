@@ -10,7 +10,7 @@ import (
 // ZstdFile is a read-only sqlite3vfs.File backed by a zstd-seekable reader.
 type ZstdFile struct {
 	reader   io.ReadSeeker
-	seekable seekable.Reader
+	seekable *seekable.Reader
 	// size is the decompressed database size, captured once at Open so FileSize
 	// does not have to call the reader's (non-goroutine-safe) Seek.
 	size int64
