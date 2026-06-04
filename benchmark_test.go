@@ -339,55 +339,6 @@ func BenchmarkReadCompressedHTTPSQLite(b *testing.B) {
 	})
 }
 
-// cacheHTTPVFS registers (once) a cache-enabled VFS for the HTTP benchmark.
-func cacheHTTPVFS(b *testing.B) string {
-	b.Helper()
-
-	const name = "zstd-httpcache-bench"
-
-	if err := sqlitezstd.Register(name, sqlitezstd.WithHTTPCacheSize(64<<20)); err != nil &&
-		!strings.Contains(err.Error(), "already") {
-		b.Fatalf("Failed to register http-cache vfs: %v", err)
-	}
-
-	return name
-}
-
-// BenchmarkReadCompressedHTTPSQLiteCached mirrors BenchmarkReadCompressedHTTPSQLite
-// but through the coalescing HTTP cache. Over a local httptest server the latency
-// win is small; the real benefit (far fewer Range GETs) is asserted by
-// TestHTTPCacheCoalescesGETs.
-func BenchmarkReadCompressedHTTPSQLiteCached(b *testing.B) {
-	_, zstPath := setupDB(b)
-
-	zstDir := filepath.Dir(zstPath)
-
-	server := httptest.NewServer(http.FileServer(http.Dir(zstDir)))
-	defer server.Close()
-
-	vfs := cacheHTTPVFS(b)
-
-	client, err := sql.Open("sqlite3", fmt.Sprintf("%s/%s?vfs=%s", server.URL, filepath.Base(zstPath), vfs))
-	if err != nil {
-		b.Fatalf("Query failed: %v", err)
-	}
-	defer client.Close() //nolint: errcheck
-
-	client.SetMaxOpenConns(max(4, runtime.NumCPU()))
-
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		var count int
-		for pb.Next() {
-			err = client.QueryRow("SELECT MAX(value) FROM entries").Scan(&count)
-			if err != nil {
-				b.Fatalf("Query failed: %v", err)
-			}
-		}
-	})
-}
-
 func BenchmarkReadCompressedRtreeSQLite(b *testing.B) {
 	_, zstPath := setupDB(b)
 
