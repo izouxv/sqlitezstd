@@ -151,12 +151,11 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 		return nil, fmt.Errorf("create zstd decoder: %w", err)
 	}
 
-	cachingDec, err := newCachingDecoder(decoder, z.opts.frameCacheSize)
-	if err != nil {
-		return nil, fmt.Errorf("create caching decoder: %w", err)
-	}
-
-	sr, err := seekable.NewReader(reader, cachingDec)
+	sr, err := seekable.NewReader(
+		reader,
+		decoder,
+		seekable.WithReaderFrameCache(newDecodedFrameCache(z.opts.frameCacheSize)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create seekable reader: %w", err)
 	}

@@ -9,11 +9,9 @@ import (
 // Default option values. These are applied by [Register] and by the default
 // "zstd" VFS registered in init().
 const (
-	// DefaultFrameCacheSize is the number of zstd frames cached per opened file
-	// (both the compressed bytes and the decompressed output). The upstream
-	// seekable reader only caches a single frame, so this cache is what keeps
-	// SQLite's scattered page reads from repeatedly re-fetching and
-	// re-decompressing the same frames.
+	// DefaultFrameCacheSize is the number of zstd frames cached per opened file.
+	// The same count is used for sqlitezstd's compressed-frame cache and the
+	// seekable reader's decoded-frame cache.
 	DefaultFrameCacheSize = 64
 	// DefaultHTTPTimeout bounds dialing and waiting for response headers on the
 	// HTTP(S) path so a hung server cannot block a query indefinitely.

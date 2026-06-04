@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
 )
 
 // countingReaderAt records how many times the underlying source is read.
@@ -67,63 +67,17 @@ func TestFrameReaderCachesCompressedReads(t *testing.T) {
 	}
 }
 
-// countingDecoder records how many times the underlying decoder is invoked.
-type countingDecoder struct {
-	dec     zstdDecoder
-	decodes atomic.Int64
-}
-
-func (c *countingDecoder) DecodeAll(input, dst []byte) ([]byte, error) {
-	c.decodes.Add(1)
-
-	return c.dec.DecodeAll(input, dst)
-}
-
-func TestCachingDecoderCachesDecompression(t *testing.T) {
+func TestDecodedFrameCacheUsesSeekableSieve(t *testing.T) {
 	t.Parallel()
 
-	enc, err := zstd.NewWriter(nil)
-	if err != nil {
-		t.Fatalf("new encoder: %v", err)
+	cache := newDecodedFrameCache(8)
+	if _, ok := cache.(*framecache.Sieve); !ok {
+		t.Fatalf("newDecodedFrameCache returned %T, want *framecache.Sieve", cache)
 	}
 
-	raw := bytes.Repeat([]byte("hello world "), 1000)
-	compressed := enc.EncodeAll(raw, nil)
-	_ = enc.Close()
-
-	real, err := zstd.NewReader(nil)
-	if err != nil {
-		t.Fatalf("new decoder: %v", err)
-	}
-	defer real.Close()
-
-	counter := &countingDecoder{dec: real}
-
-	decoder, err := newCachingDecoder(counter, 8)
-	if err != nil {
-		t.Fatalf("newCachingDecoder: %v", err)
-	}
-
-	out1, err := decoder.DecodeAll(compressed, nil)
-	if err != nil {
-		t.Fatalf("first DecodeAll: %v", err)
-	}
-	if !bytes.Equal(out1, raw) {
-		t.Fatal("first DecodeAll produced wrong output")
-	}
-	if got := counter.decodes.Load(); got != 1 {
-		t.Fatalf("want 1 underlying decode, got %d", got)
-	}
-
-	// An identical input must be served from the cache.
-	out2, err := decoder.DecodeAll(compressed, nil)
-	if err != nil {
-		t.Fatalf("second DecodeAll: %v", err)
-	}
-	if !bytes.Equal(out2, raw) {
-		t.Fatal("second DecodeAll produced wrong output")
-	}
-	if got := counter.decodes.Load(); got != 1 {
-		t.Fatalf("want still 1 underlying decode after cache hit, got %d", got)
+	cache.Put(1, []byte("frame"))
+	got, ok := cache.Get(1)
+	if !ok || !bytes.Equal(got, []byte("frame")) {
+		t.Fatalf("Get(1) = %q, %t; want frame, true", got, ok)
 	}
 }
