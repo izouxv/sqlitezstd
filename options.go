@@ -12,11 +12,6 @@ const (
 	// DefaultFrameCacheSize is the number of decoded zstd frames cached per
 	// opened file.
 	DefaultFrameCacheSize = 64
-	// DefaultHTTPPageSize is retained for source compatibility.
-	//
-	// Deprecated: HTTP byte caching has been removed; this value is no longer
-	// used.
-	DefaultHTTPPageSize = 64 << 10
 	// DefaultHTTPTimeout bounds dialing and waiting for response headers on the
 	// HTTP(S) path so a hung server cannot block a query indefinitely.
 	DefaultHTTPTimeout = 30 * time.Second
@@ -68,26 +63,6 @@ func WithHTTPRetries(n int) Option {
 		if n >= 0 {
 			o.httpMaxRetries = n
 		}
-	}
-}
-
-// WithHTTPCacheSize is retained for source compatibility.
-//
-// Deprecated: HTTP byte caching has been removed. The decoded-frame cache
-// configured by [WithFrameCacheSize] is now the only persistent frame cache.
-func WithHTTPCacheSize(maxBytes int64) Option {
-	return func(*Options) {
-		_ = maxBytes
-	}
-}
-
-// WithHTTPPageSize is retained for source compatibility.
-//
-// Deprecated: HTTP byte caching has been removed. This option no longer has any
-// effect.
-func WithHTTPPageSize(bytes int) Option {
-	return func(*Options) {
-		_ = bytes
 	}
 }
 
