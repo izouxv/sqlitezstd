@@ -3,7 +3,6 @@ package sqlitezstd
 import (
 	"sync"
 
-	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -17,7 +16,3 @@ import (
 var sharedDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
 	return zstd.NewReader(nil)
 })
-
-func newDecodedFrameCache(size int) framecache.Cache {
-	return framecache.NewSieve(framecache.Limits{MaxFrames: size})
-}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	seekable "github.com/SaveTheRbtz/zstd-seekable-format-go/pkg"
+	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/psanford/httpreadat"
 	"github.com/psanford/sqlite3vfs"
@@ -154,7 +155,9 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 	sr, err := seekable.NewReader(
 		reader,
 		decoder,
-		seekable.WithReaderFrameCache(newDecodedFrameCache(z.opts.frameCacheSize)),
+		seekable.WithReaderFrameCache(framecache.NewSieve(framecache.Limits{
+			MaxFrames: z.opts.frameCacheSize,
+		})),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create seekable reader: %w", err)

@@ -5,8 +5,6 @@ import (
 	"io"
 	"sync/atomic"
 	"testing"
-
-	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
 )
 
 // countingReaderAt records how many times the underlying source is read.
@@ -64,20 +62,5 @@ func TestFrameReaderCachesCompressedReads(t *testing.T) {
 
 	if !bytes.Equal(p, data[256:256+len(p)]) {
 		t.Fatal("cached ReadAt returned wrong bytes")
-	}
-}
-
-func TestDecodedFrameCacheUsesSeekableSieve(t *testing.T) {
-	t.Parallel()
-
-	cache := newDecodedFrameCache(8)
-	if _, ok := cache.(*framecache.Sieve); !ok {
-		t.Fatalf("newDecodedFrameCache returned %T, want *framecache.Sieve", cache)
-	}
-
-	cache.Put(1, []byte("frame"))
-	got, ok := cache.Get(1)
-	if !ok || !bytes.Equal(got, []byte("frame")) {
-		t.Fatalf("Get(1) = %q, %t; want frame, true", got, ok)
 	}
 }
