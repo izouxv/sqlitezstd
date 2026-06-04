@@ -50,10 +50,6 @@ var (
 	_ io.Closer     = (*frameReader)(nil)
 )
 
-func newFrameReader(src io.ReaderAt, size int64) *frameReader {
-	return &frameReader{src: src, size: size}
-}
-
 // ReadAt implements io.ReaderAt and is safe for concurrent use.
 func (r *frameReader) ReadAt(p []byte, off int64) (int, error) {
 	if r.size < 0 {

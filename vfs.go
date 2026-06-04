@@ -131,7 +131,10 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 		return nil, err
 	}
 
-	reader := newFrameReader(src, size)
+	reader := &frameReader{
+		src:  src,
+		size: size,
+	}
 
 	defer func() {
 		if err != nil {
