@@ -35,8 +35,8 @@ var (
 // its concurrency-safe, positional fast-path when the underlying reader
 // implements io.ReaderAt (otherwise it falls back to a mutex-guarded Seek+Read);
 // and the LRU here caches the compressed bytes of each frame keyed by offset, so
-// frames the upstream single-frame cache has evicted are not re-fetched from
-// disk or — far more importantly — re-fetched over the network.
+// decoded-cache misses can avoid re-fetching the same compressed frame from
+// disk or — far more importantly — over the network.
 //
 // ReadAt is safe for concurrent use. The sequential Read/Seek methods (used only
 // for the seek-table footer at open time) are guarded by mu and must not be

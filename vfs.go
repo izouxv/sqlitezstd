@@ -11,6 +11,7 @@ import (
 
 	seekable "github.com/SaveTheRbtz/zstd-seekable-format-go/pkg"
 	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/psanford/httpreadat"
 	"github.com/psanford/sqlite3vfs"
@@ -22,6 +23,17 @@ type ZstdVFS struct {
 }
 
 var _ sqlite3vfs.VFS = &ZstdVFS{}
+
+// sharedDecoder is a single, process-wide zstd decoder shared by every opened
+// file. The seekable reader only ever calls DecodeAll, which is safe for
+// concurrent use, so one decoder replaces the per-Open decoder pool that was
+// allocated (and never closed) for each connection. It is intentionally never
+// closed because it lives for the lifetime of the process.
+//
+// nolint: gochecknoglobals
+var sharedDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil)
+})
 
 // Register registers a zstd VFS under the given name with the supplied options.
 // Open a database against it with the "?vfs=<name>" query parameter. The default
