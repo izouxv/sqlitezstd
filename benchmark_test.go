@@ -18,7 +18,7 @@ import (
 	_ "github.com/mattn/go-sqlite3" // ensure you import the SQLite3 driver
 )
 
-// minCacheVFS registers (once) a VFS whose frame caches hold a single frame.
+// minCacheVFS registers (once) a VFS whose frame cache holds a single frame.
 // Benchmarking against it on the same fixture isolates the effect of the
 // default frame-cache size.
 func minCacheVFS(b *testing.B) string {
@@ -35,8 +35,8 @@ func minCacheVFS(b *testing.B) string {
 }
 
 // BenchmarkReadCompressedSQLiteFTS5PorterMinCache mirrors
-// BenchmarkReadCompressedSQLiteFTS5Porter but with single-frame caches, so the
-// two together show the frame caches' impact.
+// BenchmarkReadCompressedSQLiteFTS5Porter but with a single-frame cache, so the
+// two together show the frame cache's impact.
 func BenchmarkReadCompressedSQLiteFTS5PorterMinCache(b *testing.B) {
 	_, zstPath := setupDB(b)
 

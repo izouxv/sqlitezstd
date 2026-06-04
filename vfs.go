@@ -144,14 +144,7 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 		return nil, err
 	}
 
-	reader, err := newFrameReader(src, size, z.opts.frameCacheSize)
-	if err != nil {
-		if closer, ok := src.(io.Closer); ok {
-			_ = closer.Close()
-		}
-
-		return nil, fmt.Errorf("create frame reader: %w", err)
-	}
+	reader := newFrameReader(src, size)
 
 	defer func() {
 		if err != nil {

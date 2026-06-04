@@ -17,8 +17,6 @@ import (
 	"errors"
 	"io"
 	"sync"
-
-	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 var (
@@ -29,22 +27,18 @@ var (
 
 // frameReader adapts a fixed-size io.ReaderAt (a local *os.File or the HTTP
 // range reader) into the io.ReadSeeker the seekable reader requires, while also
-// exposing a cached io.ReaderAt.
+// exposing io.ReaderAt directly.
 //
-// Exposing ReadAt is important for two reasons: the seekable reader only takes
-// its concurrency-safe, positional fast-path when the underlying reader
-// implements io.ReaderAt (otherwise it falls back to a mutex-guarded Seek+Read);
-// and the LRU here caches the compressed bytes of each frame keyed by offset, so
-// decoded-cache misses can avoid re-fetching the same compressed frame from
-// disk or — far more importantly — over the network.
+// Exposing ReadAt is important because the seekable reader only takes its
+// concurrency-safe, positional fast-path when the underlying reader implements
+// io.ReaderAt; otherwise it falls back to a mutex-guarded Seek+Read.
 //
 // ReadAt is safe for concurrent use. The sequential Read/Seek methods (used only
 // for the seek-table footer at open time) are guarded by mu and must not be
 // called concurrently with each other.
 type frameReader struct {
-	src   io.ReaderAt
-	size  int64
-	cache *lru.Cache[int64, []byte]
+	src  io.ReaderAt
+	size int64
 
 	mu     sync.Mutex
 	offset int64
@@ -56,18 +50,11 @@ var (
 	_ io.Closer     = (*frameReader)(nil)
 )
 
-func newFrameReader(src io.ReaderAt, size int64, cacheSize int) (*frameReader, error) {
-	cache, err := lru.New[int64, []byte](cacheSize)
-	if err != nil {
-		return nil, err
-	}
-
-	return &frameReader{src: src, size: size, cache: cache}, nil
+func newFrameReader(src io.ReaderAt, size int64) *frameReader {
+	return &frameReader{src: src, size: size}
 }
 
-// ReadAt implements io.ReaderAt and is safe for concurrent use. Compressed frame
-// bytes are served from the LRU when present (the seekable reader always
-// requests a given frame at the same offset and length).
+// ReadAt implements io.ReaderAt and is safe for concurrent use.
 func (r *frameReader) ReadAt(p []byte, off int64) (int, error) {
 	if r.size < 0 {
 		return 0, errInvalidSize
@@ -76,20 +63,7 @@ func (r *frameReader) ReadAt(p []byte, off int64) (int, error) {
 		return 0, nil
 	}
 
-	if cached, ok := r.cache.Get(off); ok && len(cached) == len(p) {
-		copy(p, cached)
-
-		return len(p), nil
-	}
-
-	n, err := r.src.ReadAt(p, off)
-	if (err == nil || errors.Is(err, io.EOF)) && n == len(p) {
-		buf := make([]byte, n)
-		copy(buf, p[:n])
-		_ = r.cache.Add(off, buf)
-	}
-
-	return n, err
+	return r.src.ReadAt(p, off)
 }
 
 // Read implements io.Reader. It is not safe for concurrent use.

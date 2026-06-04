@@ -9,9 +9,8 @@ import (
 // Default option values. These are applied by [Register] and by the default
 // "zstd" VFS registered in init().
 const (
-	// DefaultFrameCacheSize is the number of zstd frames cached per opened file.
-	// The same count is used for sqlitezstd's compressed-frame cache and the
-	// seekable reader's decoded-frame cache.
+	// DefaultFrameCacheSize is the number of decoded zstd frames cached per
+	// opened file.
 	DefaultFrameCacheSize = 64
 	// DefaultHTTPTimeout bounds dialing and waiting for response headers on the
 	// HTTP(S) path so a hung server cannot block a query indefinitely.
@@ -39,7 +38,7 @@ type Options struct {
 // [WithHTTPRetries], and [WithLogger].
 type Option func(*Options)
 
-// WithFrameCacheSize sets the number of zstd frames cached per opened file.
+// WithFrameCacheSize sets the number of decoded zstd frames cached per opened file.
 // Values <= 0 are ignored (the default is kept).
 func WithFrameCacheSize(frames int) Option {
 	return func(o *Options) {
