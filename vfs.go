@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	seekable "github.com/SaveTheRbtz/zstd-seekable-format-go/pkg"
+	"github.com/SaveTheRbtz/zstd-seekable-format-go/pkg/framecache"
+	"github.com/klauspost/compress/zstd"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/psanford/httpreadat"
 	"github.com/psanford/sqlite3vfs"
@@ -21,6 +23,17 @@ type ZstdVFS struct {
 }
 
 var _ sqlite3vfs.VFS = &ZstdVFS{}
+
+// sharedDecoder is a single, process-wide zstd decoder shared by every opened
+// file. The seekable reader only ever calls DecodeAll, which is safe for
+// concurrent use, so one decoder replaces the per-Open decoder pool that was
+// allocated (and never closed) for each connection. It is intentionally never
+// closed because it lives for the lifetime of the process.
+//
+// nolint: gochecknoglobals
+var sharedDecoder = sync.OnceValues(func() (*zstd.Decoder, error) {
+	return zstd.NewReader(nil)
+})
 
 // Register registers a zstd VFS under the given name with the supplied options.
 // Open a database against it with the "?vfs=<name>" query parameter. The default
@@ -84,24 +97,11 @@ func (z *ZstdVFS) resolveSource(name string) (io.ReaderAt, int64, error) {
 			return nil, 0, fmt.Errorf("parse url: %w", err)
 		}
 
-		rangerOpts := []httpreadat.Option{httpreadat.WithRoundTripper(newRangeRoundTripper(z.opts))}
-
-		ranger := httpreadat.New(uri.String(), rangerOpts...)
+		ranger := httpreadat.New(uri.String(), httpreadat.WithRoundTripper(newRangeRoundTripper(z.opts)))
 
 		size, err := ranger.Size()
 		if err != nil {
 			return nil, 0, fmt.Errorf("determine remote size: %w", err)
-		}
-
-		if z.opts.httpCacheBytes > 0 {
-			cache, err := newHTTPReadCache(size, z.opts.httpPageSize, z.opts.httpCacheBytes)
-			if err != nil {
-				return nil, 0, fmt.Errorf("create http cache: %w", err)
-			}
-
-			// Re-create the ranger with the coalescing cache handler installed,
-			// reusing the already-built transport.
-			ranger = httpreadat.New(uri.String(), append(rangerOpts, httpreadat.WithCacheHandler(cache))...)
 		}
 
 		return ranger, size, nil
@@ -131,13 +131,9 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 		return nil, err
 	}
 
-	reader, err := newFrameReader(src, size, z.opts.frameCacheSize)
-	if err != nil {
-		if closer, ok := src.(io.Closer); ok {
-			_ = closer.Close()
-		}
-
-		return nil, fmt.Errorf("create frame reader: %w", err)
+	reader := &frameReader{
+		src:  src,
+		size: size,
 	}
 
 	defer func() {
@@ -151,12 +147,13 @@ func (z *ZstdVFS) open(name string) (_ *ZstdFile, err error) {
 		return nil, fmt.Errorf("create zstd decoder: %w", err)
 	}
 
-	cachingDec, err := newCachingDecoder(decoder, z.opts.frameCacheSize)
-	if err != nil {
-		return nil, fmt.Errorf("create caching decoder: %w", err)
-	}
-
-	sr, err := seekable.NewReader(reader, cachingDec)
+	sr, err := seekable.NewReader(
+		reader,
+		decoder,
+		seekable.WithReaderFrameCache(framecache.NewSieve(framecache.Limits{
+			MaxFrames: z.opts.frameCacheSize,
+		})),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create seekable reader: %w", err)
 	}

@@ -9,11 +9,8 @@ import (
 // Default option values. These are applied by [Register] and by the default
 // "zstd" VFS registered in init().
 const (
-	// DefaultFrameCacheSize is the number of zstd frames cached per opened file
-	// (both the compressed bytes and the decompressed output). The upstream
-	// seekable reader only caches a single frame, so this cache is what keeps
-	// SQLite's scattered page reads from repeatedly re-fetching and
-	// re-decompressing the same frames.
+	// DefaultFrameCacheSize is the number of decoded zstd frames cached per
+	// opened file.
 	DefaultFrameCacheSize = 64
 	// DefaultHTTPTimeout bounds dialing and waiting for response headers on the
 	// HTTP(S) path so a hung server cannot block a query indefinitely.
@@ -31,8 +28,6 @@ type Options struct {
 	frameCacheSize int
 	httpTimeout    time.Duration
 	httpMaxRetries int
-	httpCacheBytes int64
-	httpPageSize   int
 	roundTripper   http.RoundTripper
 	logger         *slog.Logger
 }
@@ -41,7 +36,7 @@ type Options struct {
 // [WithHTTPRetries], and [WithLogger].
 type Option func(*Options)
 
-// WithFrameCacheSize sets the number of zstd frames cached per opened file.
+// WithFrameCacheSize sets the number of decoded zstd frames cached per opened file.
 // Values <= 0 are ignored (the default is kept).
 func WithFrameCacheSize(frames int) Option {
 	return func(o *Options) {
@@ -67,29 +62,6 @@ func WithHTTPRetries(n int) Option {
 	return func(o *Options) {
 		if n >= 0 {
 			o.httpMaxRetries = n
-		}
-	}
-}
-
-// WithHTTPCacheSize enables an in-memory, page-aligned read cache for the
-// HTTP(S) path, bounded to roughly maxBytes. It coalesces the contiguous run of
-// missing pages covering a read into a single Range GET and serves adjacent
-// frames from cache, drastically cutting request count for remote scans. A
-// value <= 0 (the default) disables the cache, preserving the original
-// one-GET-per-frame behavior. Has no effect on the local-file path.
-func WithHTTPCacheSize(maxBytes int64) Option {
-	return func(o *Options) {
-		o.httpCacheBytes = maxBytes
-	}
-}
-
-// WithHTTPPageSize sets the coalescing/read-ahead page size for the HTTP cache
-// (see [WithHTTPCacheSize]). Values <= 0 keep the default of
-// [DefaultHTTPPageSize].
-func WithHTTPPageSize(bytes int) Option {
-	return func(o *Options) {
-		if bytes > 0 {
-			o.httpPageSize = bytes
 		}
 	}
 }
@@ -132,7 +104,6 @@ func defaultOptions() *Options {
 		frameCacheSize: DefaultFrameCacheSize,
 		httpTimeout:    DefaultHTTPTimeout,
 		httpMaxRetries: DefaultHTTPMaxRetries,
-		httpPageSize:   DefaultHTTPPageSize,
 		logger:         slog.Default(),
 	}
 }

@@ -111,32 +111,6 @@ rejected rather than silently returning wrong data. Each opened connection makes
 one small request to determine the file size, then fetches frames on demand.
 Frames are cached per connection, so repeated reads do not re-hit the network.
 
-#### Coalescing reads for remote (S3/CDN) databases
-
-By default each frame is fetched in its own Range GET. For high-latency stores
-like S3 a query can fire many small GETs. Enable an in-memory, page-aligned read
-cache to coalesce the contiguous run of missing pages behind a read into a
-single GET (default page size 64 KiB) and to serve adjacent frames from cache:
-
-```go
-import sqlitezstd "github.com/jtarchie/sqlitezstd"
-
-// Register a cache-enabled VFS once (e.g. at startup). DSN query params are
-// stripped before the VFS sees the path, so configuration lives on the named
-// VFS, not the URL.
-err := sqlitezstd.Register("zstdcache",
-    sqlitezstd.WithHTTPCacheSize(64<<20), // ~64 MiB of coalesced pages per open
-)
-
-db, _ := sql.Open("sqlite3", "https://bucket.example.com/segment.sqlite.zst?vfs=zstdcache")
-```
-
-In practice this collapses a remote query's request count by an order of
-magnitude — a full-table-scan test issues **125 Range GETs without the cache vs
-9 with it (~14× fewer)**. The cache is per opened file and bounded by the
-configured byte cap (LRU eviction), so memory stays bounded. Tune the page size
-with `WithHTTPPageSize`.
-
 For authenticated buckets, supply a signing transport with
 `WithRoundTripper`/`WithHTTPClient`; the library still wraps it with timeout,
 retry, and range-validation.
@@ -153,8 +127,7 @@ go build -tags fts5 ./...
 ### Configuration
 
 Importing the package registers a `zstd` VFS with sensible defaults. To tune the
-frame-cache size, HTTP timeout, retry count, HTTP read cache
-(`WithHTTPCacheSize`/`WithHTTPPageSize`), transport
+frame-cache size, HTTP timeout, retry count, transport
 (`WithRoundTripper`/`WithHTTPClient`), or logger, register your own named VFS and
 reference it via `?vfs=<name>`:
 

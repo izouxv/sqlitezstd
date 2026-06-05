@@ -54,8 +54,8 @@ func (z *ZstdFile) SectorSize() int64 {
 	// A whole zstd frame must be decompressed to serve any byte within it, but
 	// SQLite reads a read-only immutable database page-by-page regardless of the
 	// reported sector size — the intra-frame locality win is captured by the
-	// frame cache (see decoder.go / readerat.go), not by this value. Reporting 0
-	// keeps SQLite on its default behavior.
+	// frame cache, not by this value. Reporting 0 keeps SQLite on its default
+	// behavior.
 	return 0
 }
 
